@@ -1,0 +1,31 @@
+me驱动.高级控制电路
+高级控制电路.基础控制电路,富集合金
+基础控制电路.冶金灌注机,晶体管
+晶体管.黑色塑料板,晶体管2,压力室
+黑色塑料板.塑料混合机
+压力室.极端合金,高级板
+极端合金.合金炉,高强合金,硬碳合金
+合金炉.enhanced alloy smelter.enhanced machine classis .enhanced dye blend.grains of piezallity.pulsating crystal.充能钻石水晶
+高强合金.金属成型机,熔融高强合金
+熔融高强合金.盐混合器,熔融锂
+盐混合器.机器框架.电动马达.马达
+硬碳合金.合金炉
+冶金灌注机.核熔炉.高强合金
+富集合金.电容,冶金灌注机
+电容.压力室,青色塑料板,超级微芯片,melodic capacitor
+青色塑料板.塑料混合机
+超级微芯片.钻石芯片,晶体管2
+melodic capacitor.melodic alloy ingot,crystalline capacitor
+melodic alloy ingot .end steel ingot ,钍锭
+crystalline capacitor.crystalline alloy ingot,endergised capaciter
+crystalline alloy ingot.grains of piezallity
+endergised capaciter.vivid alloy ingot,endergetic silver capacitor
+金属成型机.机器框架nu.反应堆外壳核心,蓝钚锭,末影外壳,机器框架
+蓝钚锭.蓝晶锭.黄铀锭.yellonium
+晶体管2.endergised capaciter
+钍锭.钍矿石.镭射钻
+镭射钻.淡黄色塑料板.塑料混合机
+镭射钻.钢制框架.高强合金
+末影外壳.充能钻石水晶
+强化黑曜石锭.锇压缩机.富集合金,高级控制电路
+
