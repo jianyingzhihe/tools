@@ -224,6 +224,7 @@ class GeneGraphUI(QMainWindow):
         print(input_string)
         nodes_in_chain = [part.strip() for part in input_string.split('.')]
 
+
         if len(nodes_in_chain) < 2:
             raise ValueError("输入至少需要两个节点，如 a.b")
 
