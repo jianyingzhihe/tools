@@ -8,8 +8,9 @@ from datetime import datetime
 import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QTextEdit, QLineEdit, QPushButton, QLabel, QListWidget,
-                             QFileDialog, QMessageBox, QSplitter, QComboBox, QSpinBox)
-from PyQt5.QtCore import Qt
+                             QFileDialog, QMessageBox, QSplitter, QComboBox, QSpinBox,
+                             QListWidgetItem, QMenu, QAction)
+from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QFont, QPalette, QColor
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
@@ -110,12 +111,13 @@ class GeneGraphUI(QMainWindow):
         input_label.setFont(QFont('Arial', 12))
         input_layout.addWidget(input_label)
 
-        help_text = QLabel('格式: a.b, a。b, 2a。3b, a.b.c, 2a.3b.4c\n支持中文句号和直接数量表示')
+        help_text = QLabel(
+            '格式: a.b, a。b, 2a。3b, a.b.c, 2a.3b.4c\n支持中文句号和直接数量表示\n支持并列关系: a.2b，3c 或 a.2b;3c')
         help_text.setStyleSheet('color: gray; font-size: 10px;')
         input_layout.addWidget(help_text)
 
         self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText('输入节点关系，如: 2a。3b 或 a.b.c')
+        self.input_field.setPlaceholderText('输入节点关系，如: 2a。3b 或 a.b.c 或 a.2b，3c')
         self.input_field.returnPressed.connect(self.add_edges_from_input)
         input_layout.addWidget(self.input_field)
 
@@ -136,11 +138,13 @@ class GeneGraphUI(QMainWindow):
         self.nodes_list = QListWidget()
         lists_layout.addWidget(self.nodes_list)
 
-        edges_label = QLabel('边列表:')
+        edges_label = QLabel('边列表 (右键删除):')
         edges_label.setFont(QFont('Arial', 12))
         lists_layout.addWidget(edges_label)
 
         self.edges_list = QListWidget()
+        self.edges_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.edges_list.customContextMenuRequested.connect(self.show_edge_context_menu)
         lists_layout.addWidget(self.edges_list)
 
         layout.addWidget(lists_group)
@@ -220,6 +224,61 @@ class GeneGraphUI(QMainWindow):
         self.status_label.setStyleSheet('color: green; background-color: #f0f0f0; padding: 5px;')
         layout.addWidget(self.status_label)
 
+    def show_edge_context_menu(self, position):
+        """显示边列表的右键菜单"""
+        item = self.edges_list.itemAt(position)
+        if not item:
+            return
+
+        # 创建右键菜单
+        menu = QMenu(self)
+        delete_action = QAction("删除此边", self)
+        delete_action.triggered.connect(lambda: self.delete_selected_edge(item))
+        menu.addAction(delete_action)
+
+        # 显示菜单
+        menu.exec_(self.edges_list.mapToGlobal(position))
+
+    def delete_selected_edge(self, item):
+        """删除选中的边"""
+        # 从边列表项中解析边信息
+        edge_text = item.text()
+        # 解析格式: "源节点 [数量] → 目标节点 [数量]"
+        match = re.match(r'(\w+)\s*\[\d+\]\s*→\s*(\w+)\s*\[\d+\]', edge_text)
+        if not match:
+            # 尝试其他可能的格式
+            match = re.match(r'(\w+)\s*→\s*(\w+)', edge_text)
+            if not match:
+                QMessageBox.warning(self, '错误', '无法解析边信息')
+                return
+
+        source = match.group(1)
+        target = match.group(2)
+
+        # 确认删除
+        reply = QMessageBox.question(self, '确认删除',
+                                     f'确定要删除边 "{source} → {target}" 吗？',
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            # 从图中删除边
+            if self.G.has_edge(source, target):
+                self.G.remove_edge(source, target)
+
+                # 重新计算数量
+                self.calculate_quantities()
+
+                # 更新显示
+                self.draw_graph()
+                self.update_lists()
+
+                # 自动保存
+                if self.auto_save_enabled:
+                    self.save_config("gene_graph_config.txt")
+
+                self.status_label.setText(f'已删除边: {source} → {target}')
+            else:
+                QMessageBox.warning(self, '错误', '边不存在')
+
     def on_root_quantity_changed(self, value):
         """根节点数量改变时的处理"""
         self.root_quantity = value
@@ -244,53 +303,81 @@ class GeneGraphUI(QMainWindow):
             self.update_lists()
             self.status_label.setText(f'成功添加关系: {input_text}')
         except Exception as e:
-            QMessageBox.warning(self, '输入错误', f'错误: {e}\n请使用正确格式，例如：a.b 或 2a。3b 或 a.b.c')
+            QMessageBox.warning(self, '输入错误', f'错误: {e}\n请使用正确格式，例如：a.b 或 2a。3b 或 a.b.c 或 a.2b，3c')
 
     def parse_and_add_edges(self, input_string, auto_save=False):
-        """解析输入字符串并添加边，支持中文句号和直接数量表示"""
-        # 统一替换中文句号为英文句点
-        input_string = input_string.replace('。', '.')
+        """解析输入字符串并添加边，支持中文句号、逗号、分号和直接数量表示"""
+        # 统一替换中文标点为英文标点
+        input_string = input_string.replace('。', '.').replace('，', ',').replace('；', ',')
 
         # 使用正则表达式解析节点和数量关系
         # 匹配模式：可选的数字+节点名称
         pattern = r'(\d*)([a-zA-Z\u4e00-\u9fff_][a-zA-Z0-9\u4e00-\u9fff_]*)'
 
-        # 分割节点链
-        parts = input_string.split('.')
-        nodes_with_quantities = []
+        # 分割主节点链（使用句点）
+        main_parts = input_string.split('.')
 
-        for part in parts:
-            matches = re.findall(pattern, part.strip())
-            for match in matches:
-                quantity_str = match[0]
-                node_name = match[1]
-
-                if not node_name:
-                    continue
-
-                # 解析数量
-                if quantity_str:
-                    quantity = int(quantity_str)
-                else:
-                    quantity = 1  # 默认数量为1
-
-                nodes_with_quantities.append((node_name, quantity))
-
-        if len(nodes_with_quantities) < 2:
+        if len(main_parts) < 2:
             raise ValueError("输入至少需要两个节点，如 a.b 或 2a。3b")
 
-        # 添加边和设置数量关系
-        for i in range(len(nodes_with_quantities) - 1):
-            source, source_qty = nodes_with_quantities[i]
-            target, target_qty = nodes_with_quantities[i + 1]
+        # 处理第一个部分（起始节点）
+        first_part = main_parts[0].strip()
+        first_matches = re.findall(pattern, first_part)
+        if not first_matches:
+            raise ValueError("起始节点格式错误")
 
-            # 添加边
-            self.G.add_edge(source, target)
+        # 获取起始节点
+        start_node_name = first_matches[0][1]
+        start_node_qty = int(first_matches[0][0]) if first_matches[0][0] else 1
 
-            # 设置边的数量关系属性
-            self.G[source][target]['source_quantity'] = source_qty
-            self.G[source][target]['target_quantity'] = target_qty
+        # 处理后续部分，支持并列关系
+        for i in range(1, len(main_parts)):
+            current_part = main_parts[i].strip()
+            # 使用逗号分割并列关系
+            parallel_parts = current_part.split(',')
+            print(parallel_parts)
+            if len(parallel_parts) ==1:
+                # 解析当前部分的节点
+                current_matches = re.findall(pattern, parallel_parts[0])
+                if not current_matches:
+                    continue
 
+                # 获取当前节点
+                current_node_name = current_matches[0][1]
+                current_node_qty = int(current_matches[0][0]) if current_matches[0][0] else 1
+                # 添加边
+                self.G.add_edge(start_node_name, current_node_name)
+
+                # 设置边的数量关系属性
+                self.G[start_node_name][current_node_name]['source_quantity'] = start_node_qty
+                self.G[start_node_name][current_node_name]['target_quantity'] = current_node_qty
+                # 更新起始节点为当前节点，用于链式关系
+                start_node_name = current_node_name
+                start_node_qty = current_node_qty
+
+            else :
+                for parallel_part in parallel_parts:
+                    parallel_part = parallel_part.strip()
+                    if not parallel_part:
+                        continue
+
+                    # 解析当前部分的节点
+                    current_matches = re.findall(pattern, parallel_part)
+                    if not current_matches:
+                        continue
+
+                    # 获取当前节点
+                    current_node_name = current_matches[0][1]
+                    current_node_qty = int(current_matches[0][0]) if current_matches[0][0] else 1
+
+                    # 添加边
+                    self.G.add_edge(start_node_name, current_node_name)
+
+                    # 设置边的数量关系属性
+                    self.G[start_node_name][current_node_name]['source_quantity'] = start_node_qty
+                    self.G[start_node_name][current_node_name]['target_quantity'] = current_node_qty
+                start_node_name = current_node_name
+                start_node_qty = current_node_qty
         # 只有在明确要求或自动保存开启时才保存
         if auto_save and self.auto_save_enabled:
             self.save_config("gene_graph_config.txt")
@@ -639,8 +726,6 @@ def main():
     window.show()
 
     sys.exit(app.exec_())
-
-
 
 
 if __name__ == "__main__":
