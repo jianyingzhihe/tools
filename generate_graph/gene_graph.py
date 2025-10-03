@@ -14,6 +14,7 @@ from PyQt5.QtGui import QFont, QPalette, QColor
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 import matplotlib
+import re
 
 matplotlib.use('Qt5Agg')
 
@@ -41,10 +42,11 @@ class GeneGraphUI(QMainWindow):
             "version": "1.0"
         }
         self.auto_save_enabled = True  # 添加自动保存控制标志
+        self.root_quantity = 1  # 根节点数量，默认为1
         self.initUI()
 
     def initUI(self):
-        self.setWindowTitle('基因关系图生成器')
+        self.setWindowTitle('基因关系图生成器 - 带数量计算')
         self.setGeometry(100, 100, 1600, 900)
 
         # 中央部件
@@ -79,10 +81,26 @@ class GeneGraphUI(QMainWindow):
 
     def create_control_panel(self, layout):
         # 标题
-        title_label = QLabel('基因关系图生成器')
+        title_label = QLabel('基因关系图生成器 - 带数量计算')
         title_label.setFont(QFont('Arial', 16, QFont.Bold))
         title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(title_label)
+
+        # 根节点数量设置
+        root_quantity_group = QWidget()
+        root_quantity_layout = QHBoxLayout(root_quantity_group)
+
+        root_quantity_label = QLabel('根节点数量:')
+        root_quantity_label.setFont(QFont('Arial', 12))
+        root_quantity_layout.addWidget(root_quantity_label)
+
+        self.root_quantity_spin = QSpinBox()
+        self.root_quantity_spin.setRange(1, 10000)
+        self.root_quantity_spin.setValue(1)
+        self.root_quantity_spin.valueChanged.connect(self.on_root_quantity_changed)
+        root_quantity_layout.addWidget(self.root_quantity_spin)
+
+        layout.addWidget(root_quantity_group)
 
         # 输入区域
         input_group = QWidget()
@@ -92,12 +110,12 @@ class GeneGraphUI(QMainWindow):
         input_label.setFont(QFont('Arial', 12))
         input_layout.addWidget(input_label)
 
-        help_text = QLabel('格式: a.b, a.b,c, a.b.c, a.b.c,d')
+        help_text = QLabel('格式: a.b, a。b, 2a。3b, a.b.c, 2a.3b.4c\n支持中文句号和直接数量表示')
         help_text.setStyleSheet('color: gray; font-size: 10px;')
         input_layout.addWidget(help_text)
 
         self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText('输入节点关系，如: a.b.c')
+        self.input_field.setPlaceholderText('输入节点关系，如: 2a。3b 或 a.b.c')
         self.input_field.returnPressed.connect(self.add_edges_from_input)
         input_layout.addWidget(self.input_field)
 
@@ -202,6 +220,13 @@ class GeneGraphUI(QMainWindow):
         self.status_label.setStyleSheet('color: green; background-color: #f0f0f0; padding: 5px;')
         layout.addWidget(self.status_label)
 
+    def on_root_quantity_changed(self, value):
+        """根节点数量改变时的处理"""
+        self.root_quantity = value
+        self.calculate_quantities()
+        self.draw_graph()
+        self.update_lists()
+
     def toggle_auto_save(self, state):
         self.auto_save_enabled = (state == '开启')
         self.status_label.setText(f'自动保存: {"开启" if self.auto_save_enabled else "关闭"}')
@@ -214,33 +239,133 @@ class GeneGraphUI(QMainWindow):
         try:
             self.parse_and_add_edges(input_text, auto_save=True)
             self.input_field.clear()
+            self.calculate_quantities()  # 重新计算数量
             self.draw_graph()
             self.update_lists()
             self.status_label.setText(f'成功添加关系: {input_text}')
         except Exception as e:
-            QMessageBox.warning(self, '输入错误', f'错误: {e}\n请使用正确格式，例如：a.b 或 a.b.c 或 a.b,c')
+            QMessageBox.warning(self, '输入错误', f'错误: {e}\n请使用正确格式，例如：a.b 或 2a。3b 或 a.b.c')
 
     def parse_and_add_edges(self, input_string, auto_save=False):
-        print(input_string)
-        nodes_in_chain = [part.strip() for part in input_string.split('.')]
+        """解析输入字符串并添加边，支持中文句号和直接数量表示"""
+        # 统一替换中文句号为英文句点
+        input_string = input_string.replace('。', '.')
 
+        # 使用正则表达式解析节点和数量关系
+        # 匹配模式：可选的数字+节点名称
+        pattern = r'(\d*)([a-zA-Z\u4e00-\u9fff_][a-zA-Z0-9\u4e00-\u9fff_]*)'
 
-        if len(nodes_in_chain) < 2:
-            raise ValueError("输入至少需要两个节点，如 a.b")
+        # 分割节点链
+        parts = input_string.split('.')
+        nodes_with_quantities = []
 
-        for i in range(len(nodes_in_chain) - 1):
-            source = nodes_in_chain[i]
-            targets = nodes_in_chain[i + 1].split(',')
+        for part in parts:
+            matches = re.findall(pattern, part.strip())
+            for match in matches:
+                quantity_str = match[0]
+                node_name = match[1]
 
-            for target in targets:
-                target = target.strip()
-                if not source or not target:
+                if not node_name:
                     continue
-                self.G.add_edge(source, target)
+
+                # 解析数量
+                if quantity_str:
+                    quantity = int(quantity_str)
+                else:
+                    quantity = 1  # 默认数量为1
+
+                nodes_with_quantities.append((node_name, quantity))
+
+        if len(nodes_with_quantities) < 2:
+            raise ValueError("输入至少需要两个节点，如 a.b 或 2a。3b")
+
+        # 添加边和设置数量关系
+        for i in range(len(nodes_with_quantities) - 1):
+            source, source_qty = nodes_with_quantities[i]
+            target, target_qty = nodes_with_quantities[i + 1]
+
+            # 添加边
+            self.G.add_edge(source, target)
+
+            # 设置边的数量关系属性
+            self.G[source][target]['source_quantity'] = source_qty
+            self.G[source][target]['target_quantity'] = target_qty
 
         # 只有在明确要求或自动保存开启时才保存
         if auto_save and self.auto_save_enabled:
-            self.save_config("gene_graph_config.txt")  # 使用默认文件名，不弹出对话框
+            self.save_config("gene_graph_config.txt")
+
+    def calculate_quantities(self):
+        """计算所有节点的数量"""
+        # 清除所有节点的数量属性
+        for node in self.G.nodes():
+            if 'quantity' in self.G.nodes[node]:
+                del self.G.nodes[node]['quantity']
+
+        # 找到根节点（没有入边的节点）
+        root_nodes = [node for node in self.G.nodes() if self.G.in_degree(node) == 0]
+
+        # 设置根节点数量
+        for root in root_nodes:
+            self.G.nodes[root]['quantity'] = self.root_quantity
+
+        # 使用拓扑排序确保按层次计算
+        try:
+            topological_order = list(nx.topological_sort(self.G))
+
+            for node in topological_order:
+                if node not in root_nodes:  # 跳过根节点，已经设置过数量
+                    # 计算该节点的数量（所有入边的贡献之和）
+                    total_quantity = 0
+
+                    for predecessor in self.G.predecessors(node):
+                        if 'quantity' in self.G.nodes[predecessor]:
+                            edge_data = self.G[predecessor][node]
+                            source_qty = edge_data.get('source_quantity', 1)
+                            target_qty = edge_data.get('target_quantity', 1)
+
+                            # 计算该前驱节点贡献的数量
+                            predecessor_quantity = self.G.nodes[predecessor]['quantity']
+                            contribution = predecessor_quantity * target_qty / source_qty
+                            total_quantity += contribution
+
+                    if total_quantity > 0:
+                        self.G.nodes[node]['quantity'] = total_quantity
+
+        except nx.NetworkXError:
+            # 如果有环，使用简单的方法计算
+            self.calculate_quantities_with_cycles()
+
+    def calculate_quantities_with_cycles(self):
+        """处理有环图的数量计算（简化版本）"""
+        # 找到根节点
+        root_nodes = [node for node in self.G.nodes() if self.G.in_degree(node) == 0]
+
+        # 设置根节点数量
+        for root in root_nodes:
+            self.G.nodes[root]['quantity'] = self.root_quantity
+
+        # 使用BFS遍历图
+        visited = set(root_nodes)
+        queue = list(root_nodes)
+
+        while queue:
+            current = queue.pop(0)
+
+            for successor in self.G.successors(current):
+                if 'quantity' not in self.G.nodes[successor]:
+                    edge_data = self.G[current][successor]
+                    source_qty = edge_data.get('source_quantity', 1)
+                    target_qty = edge_data.get('target_quantity', 1)
+
+                    current_quantity = self.G.nodes[current]['quantity']
+                    successor_quantity = current_quantity * target_qty / source_qty
+
+                    self.G.nodes[successor]['quantity'] = successor_quantity
+
+                if successor not in visited:
+                    visited.add(successor)
+                    queue.append(successor)
 
     def draw_graph(self):
         self.canvas.ax.clear()
@@ -257,23 +382,75 @@ class GeneGraphUI(QMainWindow):
 
             node_size = self.node_size_spin.value()
 
-            nx.draw(
+            # 绘制节点和边
+            nx.draw_networkx_edges(
                 self.G, pos,
-                with_labels=True,
-                node_size=node_size,
-                node_color='lightblue',
-                font_size=10,
-                font_weight='bold',
                 edge_color='gray',
                 arrows=True,
                 arrowsize=20,
+                alpha=0.9,
+                ax=self.canvas.ax
+            )
+
+            # 绘制节点，根据是否有数量信息使用不同颜色
+            node_colors = []
+            for node in self.G.nodes():
+                if 'quantity' in self.G.nodes[node]:
+                    node_colors.append('lightgreen')  # 有数量信息的节点
+                else:
+                    node_colors.append('lightblue')  # 无数量信息的节点
+
+            nx.draw_networkx_nodes(
+                self.G, pos,
+                node_size=node_size,
+                node_color=node_colors,
                 alpha=0.9,
                 linewidths=1.5,
                 ax=self.canvas.ax
             )
 
-            self.canvas.ax.set_title(f'基因关系图 (节点数: {len(self.G.nodes())}, 边数: {len(self.G.edges())})',
-                                     fontsize=14)
+            # 绘制节点标签，包含数量信息
+            labels = {}
+            for node in self.G.nodes():
+                if 'quantity' in self.G.nodes[node]:
+                    quantity = self.G.nodes[node]['quantity']
+                    # 格式化数量显示
+                    if quantity.is_integer():
+                        labels[node] = f"{node}\n({int(quantity)})"
+                    else:
+                        labels[node] = f"{node}\n({quantity:.2f})"
+                else:
+                    labels[node] = node
+
+            nx.draw_networkx_labels(
+                self.G, pos,
+                labels=labels,
+                font_size=10,
+                font_weight='bold',
+                ax=self.canvas.ax
+            )
+
+            # 绘制边标签，显示数量关系
+            edge_labels = {}
+            for u, v in self.G.edges():
+                edge_data = self.G[u][v]
+                source_qty = edge_data.get('source_quantity', 1)
+                target_qty = edge_data.get('target_quantity', 1)
+                edge_labels[(u, v)] = f"{source_qty}:{target_qty}"
+
+            nx.draw_networkx_edge_labels(
+                self.G, pos,
+                edge_labels=edge_labels,
+                font_size=8,
+                ax=self.canvas.ax
+            )
+
+            self.canvas.ax.set_title(
+                f'基因关系图 (节点数: {len(self.G.nodes())}, 边数: {len(self.G.edges())}, 根节点数量: {self.root_quantity})',
+                fontsize=14
+            )
+
+            self.canvas.ax.axis('off')
 
         except Exception as e:
             self.canvas.ax.text(0.5, 0.5, f'绘制错误: {e}',
@@ -287,16 +464,28 @@ class GeneGraphUI(QMainWindow):
         self.edges_list.clear()
 
         for node in sorted(self.G.nodes()):
-            self.nodes_list.addItem(f'● {node}')
+            if 'quantity' in self.G.nodes[node]:
+                quantity = self.G.nodes[node]['quantity']
+                if quantity.is_integer():
+                    self.nodes_list.addItem(f'● {node} (数量: {int(quantity)})')
+                else:
+                    self.nodes_list.addItem(f'● {node} (数量: {quantity:.2f})')
+            else:
+                self.nodes_list.addItem(f'● {node} (数量: 未计算)')
 
         for edge in sorted(self.G.edges()):
-            self.edges_list.addItem(f'{edge[0]} → {edge[1]}')
+            edge_data = self.G[edge[0]][edge[1]]
+            source_qty = edge_data.get('source_quantity', 1)
+            target_qty = edge_data.get('target_quantity', 1)
+            self.edges_list.addItem(f'{edge[0]} [{source_qty}] → {edge[1]} [{target_qty}]')
 
     def clear_graph(self):
         reply = QMessageBox.question(self, '确认清空', '确定要清空所有数据吗？',
                                      QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
             self.G.clear()
+            self.root_quantity = 1
+            self.root_quantity_spin.setValue(1)
             self.draw_graph()
             self.update_lists()
             self.save_config("gene_graph_config.txt")
@@ -307,8 +496,20 @@ class GeneGraphUI(QMainWindow):
         if filename is None:
             filename = "gene_graph_config.txt"
 
-        self.config_data["edges"] = list(self.G.edges())
+        # 保存边信息，包括数量关系
+        edges_data = []
+        for u, v in self.G.edges():
+            edge_data = {
+                'source': u,
+                'target': v,
+                'source_quantity': self.G[u][v].get('source_quantity', 1),
+                'target_quantity': self.G[u][v].get('target_quantity', 1)
+            }
+            edges_data.append(edge_data)
+
+        self.config_data["edges"] = edges_data
         self.config_data["node_count"] = len(self.G.nodes())
+        self.config_data["root_quantity"] = self.root_quantity
         self.config_data["last_modified"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if not self.config_data["created_time"]:
@@ -344,13 +545,22 @@ class GeneGraphUI(QMainWindow):
 
             self.G.clear()
 
-            for edge in loaded_data.get("edges", []):
-                if len(edge) == 2:
-                    self.G.add_edge(edge[0], edge[1])
+            edges_data = loaded_data.get("edges", [])
+            for edge_data in edges_data:
+                u = edge_data['source']
+                v = edge_data['target']
+                self.G.add_edge(u, v)
+                self.G[u][v]['source_quantity'] = edge_data.get('source_quantity', 1)
+                self.G[u][v]['target_quantity'] = edge_data.get('target_quantity', 1)
+
+            self.root_quantity = loaded_data.get("root_quantity", 1)
+            self.root_quantity_spin.setValue(self.root_quantity)
 
             self.config_data.update(loaded_data)
             self.config_data["last_modified"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            # 重新计算数量
+            self.calculate_quantities()
             self.draw_graph()
             self.update_lists()
             self.status_label.setText(f'配置已从 {filename} 加载')
@@ -390,7 +600,8 @@ class GeneGraphUI(QMainWindow):
                         except Exception as e:
                             print(f'错误处理第 {line_num} 行: {e}')
 
-            # 导入完成后一次性保存
+            # 导入完成后重新计算数量并保存
+            self.calculate_quantities()
             if original_auto_save:
                 self.save_config("gene_graph_config.txt")
 
